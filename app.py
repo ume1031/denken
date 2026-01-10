@@ -49,6 +49,7 @@ TARGET_CATEGORIES = [
 def load_csv_data(mode):
     """
     指定されたモード (ox または fill) に応じてCSVファイルを再帰的にスキャンして読み込む。
+    判定ミスを防ぐため、back（正解ラベル）の読み込み時にstrip()を二重に適用。
     """
     folder_mode = 'taku4' if mode == 'fill' else 'normal'
     search_path = os.path.join(CSV_BASE_DIR, folder_mode, "**", "*.csv")
@@ -71,11 +72,14 @@ def load_csv_data(mode):
                             raw_dummies = row[4:7] if len(row) >= 7 else []
                             dummies = [d.strip() for d in raw_dummies if d.strip()]
 
+                        # back(正解ラベル)の空白・改行を完全に除去
+                        correct_val = str(row[2]).strip().replace('\r', '').replace('\n', '')
+
                         questions.append({
                             'id': f"{mode}_{os.path.basename(f_path)}_{i}", 
                             'category': row[0].strip(), 
                             'front': row[1].strip(), 
-                            'back': row[2].strip(), # 判定ミスを防ぐため strip() を適用済み
+                            'back': correct_val, 
                             'note': row[3].strip() if len(row) > 3 else "解説はありません。",
                             'dummies': dummies
                         })
@@ -185,19 +189,20 @@ def answer(card_id):
     storage = get_storage(request)
     now_jst = get_jst_now()
     
-    user_answer = request.form.get('user_answer', '').strip()
-    correct_answer = card['back'].strip()
+    # 送信値と正解値の「完全一致」を保証するための前処理
+    user_answer = str(request.form.get('user_answer', '')).strip().replace('\r', '').replace('\n', '')
+    correct_answer = str(card['back']).strip().replace('\r', '').replace('\n', '')
     
-    # 厳格な判定ロジック：両端の空白を削除してから比較
+    # 判定
     is_correct = (user_answer == correct_answer)
     
     if is_correct:
         session['correct_count'] += 1
-        # 正解したらリストから削除
+        # 正解したら苦手リストから削除
         if card_id in storage['wrong_list']:
             storage['wrong_list'].remove(card_id)
     else:
-        # 不正解ならリストに追加
+        # 不正解なら苦手リストに追加
         if card_id not in storage['wrong_list']:
             storage['wrong_list'].append(card_id)
     
@@ -215,7 +220,7 @@ def answer(card_id):
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
-    # Cookieの更新を含むレスポンスを作成
+    # Cookieの更新
     resp = make_response(render_template('study.html', 
                                          card=card, 
                                          display_q=card['front'], 
