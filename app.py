@@ -4,7 +4,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, m
 from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'denken-v2-1-strict-logic-full'
+app.config['SECRET_KEY'] = 'denken-v2-1-strict-logic-full-final'
 
 # 日本時間設定 (JST)
 JST = timezone(timedelta(hours=9))
@@ -20,23 +20,25 @@ CSV_BASE_DIR = os.path.join(BASE_DIR, "logic", "csv_data")
 def get_storage(request):
     """
     Cookieからユーザーデータを取得。
-    KeyErrorを防止するため、各キー（wrong_list, logs）の存在を厳格に保証する。
+    KeyErrorを防止し、データが壊れている場合は空のリストで初期化する。
     """
-    data = request.cookies.get('denken_storage')
+    storage_str = request.cookies.get('denken_storage')
     storage = {"wrong_list": [], "logs": []}
-    if data:
+    
+    if storage_str:
         try:
-            storage = json.loads(data)
+            # URLデコードのような処理が必要な場合があるため安全にロード
+            storage = json.loads(storage_str)
         except Exception as e:
-            print(f"Storage Load Error: {e}")
+            print(f"Cookie Load Error: {e}")
             storage = {"wrong_list": [], "logs": []}
     
-    # キーの存在を確実に保証（復習モードが動かない原因を排除）
+    # 辞書型であることを保証し、各キーを初期化
     if not isinstance(storage, dict):
         storage = {"wrong_list": [], "logs": []}
-    if 'wrong_list' not in storage:
+    if 'wrong_list' not in storage or not isinstance(storage['wrong_list'], list):
         storage['wrong_list'] = []
-    if 'logs' not in storage:
+    if 'logs' not in storage or not isinstance(storage['logs'], list):
         storage['logs'] = []
         
     return storage
@@ -50,18 +52,16 @@ TARGET_CATEGORIES = [
 
 def load_csv_data(mode):
     """
-    指定されたモード (ox または fill) に応じてCSVファイルを読み込む。
-    読み込み時にすべての要素に対して .strip() を適用し、改行コードを除去。
+    CSVファイルを読み込む。IDを「カテゴリ_行番号」の形に固定し、
+    ファイル名に依存しすぎないようにしてCookieの肥大化を防ぐ。
     """
     folder_mode = 'taku4' if mode == 'fill' else 'normal'
     search_path = os.path.join(CSV_BASE_DIR, folder_mode, "**", "*.csv")
     files = glob.glob(search_path, recursive=True)
     
     questions = []
-    if not files:
-        return []
-
     for f_path in files:
+        f_name = os.path.basename(f_path)
         try:
             with open(f_path, encoding='utf-8-sig') as f:
                 reader = csv.reader(f)
@@ -69,13 +69,18 @@ def load_csv_data(mode):
                     if len(row) >= 3:
                         cleaned_row = [str(cell).strip().replace('\r', '').replace('\n', '') for cell in row]
                         
+                        # 判定ミスを防ぐためのID正規化
+                        # ファイル名から余計な文字を除去して短縮IDを作成
+                        short_f_name = f_name.replace('.csv', '').replace('ox_', '').replace('normal_', '')
+                        q_id = f"{mode[:1]}_{short_f_name}_{i}" 
+
                         dummies = []
                         if mode == 'fill':
                             raw_dummies = cleaned_row[4:7] if len(cleaned_row) >= 7 else []
                             dummies = [d for d in raw_dummies if d]
 
                         questions.append({
-                            'id': f"{mode}_{os.path.basename(f_path)}_{i}", 
+                            'id': q_id, 
                             'category': cleaned_row[0], 
                             'front': cleaned_row[1], 
                             'back': cleaned_row[2], 
@@ -122,12 +127,12 @@ def start_study():
     cat = request.form.get('cat', 'すべて')
     q_count = int(request.form.get('q_count', 10))
     is_review = (request.form.get('review') == 'true')
+    
     storage = get_storage(request)
     
     if is_review:
-        # 復習モード：CookieにあるIDのリストを取得
         wrong_ids = storage.get('wrong_list', [])
-        # 全データの中からIDが一致するものだけを抽出
+        # 復習時は全CSVから該当IDを検索
         all_q = load_csv_data('fill') + load_csv_data('ox')
         all_q = [q for q in all_q if q['id'] in wrong_ids]
     else:
@@ -152,7 +157,8 @@ def study():
         return redirect(url_for('show_result'))
         
     card = session['quiz_queue'][0]
-    current_mode = 'fill' if card['id'].startswith('fill') else 'ox'
+    # IDの先頭文字でモードを判別
+    current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
     
     display_q = card['front']
     choices = []
@@ -160,7 +166,6 @@ def study():
     if current_mode == 'fill':
         if card['back'] in card['front']:
             display_q = card['front'].replace(card['back'], " 【 ？ 】 ")
-        
         choices = [str(card['back']).strip()] + [str(d).strip() for d in card.get('dummies', [])]
         while len(choices) < 4:
             choices.append("---")
@@ -184,7 +189,7 @@ def answer(card_id):
         return redirect(url_for('index'))
         
     card = session['quiz_queue'][0]
-    current_mode = 'fill' if card['id'].startswith('fill') else 'ox'
+    current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
     storage = get_storage(request)
     now_jst = get_jst_now()
     
@@ -193,33 +198,30 @@ def answer(card_id):
     
     is_correct = (user_answer == correct_answer)
     
-    # --- 苦手リスト(wrong_list)の更新ロジック ---
+    # 苦手リストの更新
     if is_correct:
         session['correct_count'] += 1
-        # 正解した場合、もしリストにあれば削除
         if card_id in storage['wrong_list']:
             storage['wrong_list'].remove(card_id)
     else:
-        # 不正解の場合、リストに追加（重複防止）
         if card_id not in storage['wrong_list']:
             storage['wrong_list'].append(card_id)
     
-    # ログ記録
+    # ログは直近200件に制限してCookie肥大化（保存失敗）を防ぐ
     storage['logs'].append({
         'date': now_jst.strftime('%m/%d'), 
         'cat': card['category'], 
         'correct': is_correct
     })
-    storage['logs'] = storage['logs'][-1000:]
+    storage['logs'] = storage['logs'][-200:]
     
-    # 出題キューから削除
     session['quiz_queue'].pop(0)
     session.modified = True 
     
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
-    # Cookieをセットしたレスポンスを返す
+    # 判定画面の表示
     resp = make_response(render_template('study.html', 
                                          card=card, 
                                          display_q=card['front'], 
@@ -230,8 +232,9 @@ def answer(card_id):
                                          total=session['total_in_session'], 
                                          progress=progress))
                                          
-    # JSON化してCookieに保存 (有効期限1年)
-    resp.set_cookie('denken_storage', json.dumps(storage), max_age=60*60*24*365, samesite='Lax')
+    # Cookie保存設定 (Path=/ を明示して全ページで同期)
+    storage_json = json.dumps(storage, separators=(',', ':')) # 空白を詰めて軽量化
+    resp.set_cookie('denken_storage', storage_json, max_age=60*60*24*365, path='/', samesite='Lax')
     return resp
 
 @app.route('/result')
