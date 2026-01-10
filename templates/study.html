@@ -16,11 +16,9 @@
         .category-badge { display: inline-block; padding: 4px 12px; background: #dbeafe; color: var(--primary-color); border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin-bottom: 15px; }
         .question-text { font-size: 1.35rem; line-height: 1.7; color: #1f2937; margin-bottom: 30px; min-height: 120px; font-weight: 500; }
         
-        /* 回答ボタンのスタイル */
         .choice-btn { display: block; width: 100%; padding: 18px; margin-bottom: 15px; text-align: left; border: 2px solid #e5e7eb; border-radius: 14px; background: white; transition: all 0.2s; font-weight: 600; font-size: 1.05rem; }
         .choice-btn:hover { border-color: var(--primary-color); background-color: #f8faff; transform: translateY(-2px); }
         
-        /* ○×専用の巨大ボタン */
         .ox-container { display: flex; gap: 25px; margin-top: 10px; }
         .ox-btn { 
             flex: 1; 
@@ -40,7 +38,6 @@
         .ox-btn-x { color: var(--wrong-color); }
         .ox-btn-x:hover { border-color: var(--wrong-color); background-color: #fef2f2; transform: scale(1.03); }
 
-        /* 回答後の解説エリア */
         .explanation-box { margin-top: 30px; padding: 25px; border-radius: 18px; display: none; border-left: 8px solid; }
         .explanation-box.show { display: block; animation: slideIn 0.3s ease-out; }
         .res-correct { background-color: #ecfdf5; border-color: #10b981; color: #065f46; }
@@ -100,9 +97,7 @@
                             <p class="mb-0 small opacity-75">{% if is_correct %}お見事！その調子です。{% else %}次は頑張りましょう。{% endif %}</p>
                         </div>
                     </div>
-                    
                     <hr style="border-top: 2px solid rgba(0,0,0,0.1);">
-                    
                     <div class="explanation-content">
                         <div class="fw-bold mb-2" style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;">【 解説 】</div>
                         <p class="mb-0" style="font-size: 1.15rem; line-height: 1.6; white-space: pre-wrap;">{{ card.note }}</p>
@@ -129,7 +124,6 @@
 </div>
 
 <script>
-    // 二重クリックによる重複送信を防止するためのスクリプト
     document.getElementById('answerForm')?.addEventListener('submit', function() {
         const buttons = this.querySelectorAll('button');
         buttons.forEach(btn => {

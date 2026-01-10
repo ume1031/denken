@@ -75,7 +75,7 @@ def load_csv_data(mode):
                             'id': f"{mode}_{os.path.basename(f_path)}_{i}", 
                             'category': row[0].strip(), 
                             'front': row[1].strip(), 
-                            'back': row[2].strip(), 
+                            'back': row[2].strip(), # 判定ミスを防ぐため strip() を適用済み
                             'note': row[3].strip() if len(row) > 3 else "解説はありません。",
                             'dummies': dummies
                         })
@@ -124,6 +124,7 @@ def start_study():
     
     if is_review:
         wrong_ids = storage.get('wrong_list', [])
+        # 復習時は全モードのCSVからIDが一致するものを探す
         all_q = load_csv_data('fill') + load_csv_data('ox')
         all_q = [q for q in all_q if q['id'] in wrong_ids]
     else:
@@ -184,15 +185,19 @@ def answer(card_id):
     storage = get_storage(request)
     now_jst = get_jst_now()
     
-    user_answer = request.form.get('user_answer')
-    # 厳格な判定ロジック：ユーザーの選択肢とCSVの「back」を直接比較
-    is_correct = (user_answer == card['back'])
+    user_answer = request.form.get('user_answer', '').strip()
+    correct_answer = card['back'].strip()
+    
+    # 厳格な判定ロジック：両端の空白を削除してから比較
+    is_correct = (user_answer == correct_answer)
     
     if is_correct:
         session['correct_count'] += 1
+        # 正解したらリストから削除
         if card_id in storage['wrong_list']:
             storage['wrong_list'].remove(card_id)
     else:
+        # 不正解ならリストに追加
         if card_id not in storage['wrong_list']:
             storage['wrong_list'].append(card_id)
     
@@ -210,6 +215,7 @@ def answer(card_id):
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
+    # Cookieの更新を含むレスポンスを作成
     resp = make_response(render_template('study.html', 
                                          card=card, 
                                          display_q=card['front'], 
