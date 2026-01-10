@@ -27,13 +27,11 @@ def get_storage(request):
     
     if storage_str:
         try:
-            # URLデコードのような処理が必要な場合があるため安全にロード
             storage = json.loads(storage_str)
         except Exception as e:
             print(f"Cookie Load Error: {e}")
             storage = {"wrong_list": [], "logs": []}
     
-    # 辞書型であることを保証し、各キーを初期化
     if not isinstance(storage, dict):
         storage = {"wrong_list": [], "logs": []}
     if 'wrong_list' not in storage or not isinstance(storage['wrong_list'], list):
@@ -69,8 +67,7 @@ def load_csv_data(mode):
                     if len(row) >= 3:
                         cleaned_row = [str(cell).strip().replace('\r', '').replace('\n', '') for cell in row]
                         
-                        # 判定ミスを防ぐためのID正規化
-                        # ファイル名から余計な文字を除去して短縮IDを作成
+                        # ID生成ロジックの固定（ここがズレると削除できない）
                         short_f_name = f_name.replace('.csv', '').replace('ox_', '').replace('normal_', '')
                         q_id = f"{mode[:1]}_{short_f_name}_{i}" 
 
@@ -132,7 +129,6 @@ def start_study():
     
     if is_review:
         wrong_ids = storage.get('wrong_list', [])
-        # 復習時は全CSVから該当IDを検索
         all_q = load_csv_data('fill') + load_csv_data('ox')
         all_q = [q for q in all_q if q['id'] in wrong_ids]
     else:
@@ -157,7 +153,6 @@ def study():
         return redirect(url_for('show_result'))
         
     card = session['quiz_queue'][0]
-    # IDの先頭文字でモードを判別
     current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
     
     display_q = card['front']
@@ -198,16 +193,19 @@ def answer(card_id):
     
     is_correct = (user_answer == correct_answer)
     
-    # 苦手リストの更新
+    # --- 苦手リスト(wrong_list)の更新ロジックを強化 ---
     if is_correct:
         session['correct_count'] += 1
+        # 正解した場合、IDがリストに含まれていれば確実に削除する
         if card_id in storage['wrong_list']:
-            storage['wrong_list'].remove(card_id)
+            # filterを使って完全に排除
+            storage['wrong_list'] = [i for i in storage['wrong_list'] if i != card_id]
     else:
+        # 不正解の場合、リストに追加（重複防止）
         if card_id not in storage['wrong_list']:
             storage['wrong_list'].append(card_id)
     
-    # ログは直近200件に制限してCookie肥大化（保存失敗）を防ぐ
+    # ログ記録
     storage['logs'].append({
         'date': now_jst.strftime('%m/%d'), 
         'cat': card['category'], 
@@ -221,7 +219,6 @@ def answer(card_id):
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
-    # 判定画面の表示
     resp = make_response(render_template('study.html', 
                                          card=card, 
                                          display_q=card['front'], 
@@ -232,8 +229,8 @@ def answer(card_id):
                                          total=session['total_in_session'], 
                                          progress=progress))
                                          
-    # Cookie保存設定 (Path=/ を明示して全ページで同期)
-    storage_json = json.dumps(storage, separators=(',', ':')) # 空白を詰めて軽量化
+    # 修正：確実に最新のstorageをCookieに反映させる
+    storage_json = json.dumps(storage, separators=(',', ':'))
     resp.set_cookie('denken_storage', storage_json, max_age=60*60*24*365, path='/', samesite='Lax')
     return resp
 
