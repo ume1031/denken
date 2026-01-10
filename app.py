@@ -67,7 +67,7 @@ def load_csv_data(mode):
                     if len(row) >= 3:
                         cleaned_row = [str(cell).strip().replace('\r', '').replace('\n', '') for cell in row]
                         
-                        # ID生成ロジックの固定（ここがズレると削除できない）
+                        # ID生成ロジックの固定
                         short_f_name = f_name.replace('.csv', '').replace('ox_', '').replace('normal_', '')
                         q_id = f"{mode[:1]}_{short_f_name}_{i}" 
 
@@ -101,10 +101,7 @@ def index():
     for i in range(6, -1, -1):
         d_str = (now_jst - timedelta(days=i)).strftime('%m/%d')
         chart_labels.append(d_str)
-        # 指定した日のログを取得
         day_logs = [l for l in logs if l.get('date') == d_str and (selected_cat == 'すべて' or l.get('cat') == selected_cat)]
-        
-        # 修正箇所: 正答率ではなく「解いた問題数」をカウント
         chart_values.append(len(day_logs))
             
     days_left = max(0, (datetime(2026, 3, 22, tzinfo=JST) - now_jst).days)
@@ -119,6 +116,12 @@ def index():
 
 @app.route('/start_study', methods=['POST'])
 def start_study():
+    # 【重要】新しい学習を始める際、前回のセッション残骸を完全にクリア
+    session.pop('quiz_queue', None)
+    session.pop('last_result', None)
+    session.pop('total_in_session', None)
+    session.pop('correct_count', None)
+
     mode = request.form.get('mode', 'fill')
     cat = request.form.get('cat', 'すべて')
     q_count = int(request.form.get('q_count', 10))
@@ -148,9 +151,28 @@ def start_study():
 
 @app.route('/study')
 def study():
-    if not session.get('quiz_queue'):
+    # PRGパターン: 回答結果（解説画面）を表示すべきかチェック
+    last_result = session.get('last_result')
+    
+    # 全ての問題が終了し、かつ表示する結果もない場合はリザルト画面へ
+    if not last_result and not session.get('quiz_queue'):
         return redirect(url_for('show_result'))
-        
+
+    # --- 解説画面の表示 ---
+    if last_result:
+        card = last_result['card']
+        current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
+        return render_template('study.html', 
+                               card=card, 
+                               display_q=card['front'], 
+                               is_answered=True, 
+                               is_correct=last_result['is_correct'], 
+                               mode=current_mode, 
+                               current=last_result['current'], 
+                               total=session['total_in_session'], 
+                               progress=last_result['progress'])
+
+    # --- 問題画面の表示 ---
     card = session['quiz_queue'][0]
     current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
     
@@ -160,7 +182,11 @@ def study():
     if current_mode == 'fill':
         if card['back'] in card['front']:
             display_q = card['front'].replace(card['back'], " 【 ？ 】 ")
-        choices = [str(card['back']).strip()] + [str(d).strip() for d in card.get('dummies', [])]
+        
+        # 選択肢の生成
+        correct_answer = str(card['back']).strip()
+        choices = [correct_answer] + [str(d).strip() for d in card.get('dummies', [])]
+        # 不足分を補填
         while len(choices) < 4:
             choices.append("---")
         random.shuffle(choices)
@@ -175,15 +201,19 @@ def study():
                            mode=current_mode, 
                            progress=progress, 
                            current=idx, 
-                           total=session['total_in_session'])
+                           total=session['total_in_session'],
+                           is_answered=False)
 
 @app.route('/answer/<card_id>', methods=['POST'])
 def answer(card_id):
+    """
+    回答を処理し、結果をセッションに保存して /study へリダイレクトする。
+    これにより「フォームの再送信」を防ぐ。
+    """
     if not session.get('quiz_queue'):
         return redirect(url_for('index'))
         
     card = session['quiz_queue'][0]
-    current_mode = 'fill' if card['id'].startswith('f_') else 'ox'
     storage = get_storage(request)
     now_jst = get_jst_now()
     
@@ -192,7 +222,6 @@ def answer(card_id):
     
     is_correct = (user_answer == correct_answer)
     
-    # --- 苦手リスト(wrong_list)の更新ロジックを強化 ---
     if is_correct:
         session['correct_count'] += 1
         if card_id in storage['wrong_list']:
@@ -209,35 +238,32 @@ def answer(card_id):
     })
     storage['logs'] = storage['logs'][-200:]
     
+    # セッション更新
     session['quiz_queue'].pop(0)
-    session.modified = True 
-    
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
-    # --- グラフ表示用の統計データを取得（indexと同様のロジック） ---
-    chart_labels, chart_values = [], []
-    for i in range(6, -1, -1):
-        d_str = (now_jst - timedelta(days=i)).strftime('%m/%d')
-        chart_labels.append(d_str)
-        day_logs = [l for l in storage['logs'] if l.get('date') == d_str]
-        chart_values.append(len(day_logs))
-
-    resp = make_response(render_template('study.html', 
-                                         card=card, 
-                                         display_q=card['front'], 
-                                         is_answered=True, 
-                                         is_correct=is_correct, 
-                                         mode=current_mode, 
-                                         current=idx, 
-                                         total=session['total_in_session'], 
-                                         progress=progress,
-                                         labels=chart_labels,    # グラフ用
-                                         values=chart_values))   # グラフ用
-                                         
+    # 解説画面用に今回の結果を一時保存
+    session['last_result'] = {
+        'card': card,
+        'is_correct': is_correct,
+        'current': idx,
+        'progress': progress
+    }
+    session.modified = True 
+    
+    # Cookie更新とリダイレクト
     storage_json = json.dumps(storage, separators=(',', ':'))
+    resp = make_response(redirect(url_for('study')))
     resp.set_cookie('denken_storage', storage_json, max_age=60*60*24*365, path='/', samesite='Lax')
     return resp
+
+@app.route('/next_question')
+def next_question():
+    """解説画面から次の問題へ遷移するためのフラグ除去用"""
+    session.pop('last_result', None)
+    session.modified = True
+    return redirect(url_for('study'))
 
 @app.route('/result')
 def show_result():
@@ -248,7 +274,11 @@ def show_result():
 
 @app.route('/home')
 def go_home():
+    """中断してホームへ戻る際は全ての学習中データを破棄"""
     session.pop('quiz_queue', None)
+    session.pop('last_result', None)
+    session.pop('total_in_session', None)
+    session.pop('correct_count', None)
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
