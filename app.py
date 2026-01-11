@@ -116,13 +116,13 @@ def index():
     logs = storage.get('logs', [])
     
     chart_labels, chart_values = [], []
-    # 直近7日分のデータを集計
+    # 直近7日分のデータを集計（単位：回答数）
     for i in range(6, -1, -1):
         d_obj = now_jst - timedelta(days=i)
         d_str = d_obj.strftime('%m/%d')
         chart_labels.append(d_str)
         
-        # カテゴリに応じたログ集計（15分野フラット対応）
+        # 指定カテゴリの回答数をカウント（正解率ではなく「問」として集計）
         day_logs = [l for l in logs if l.get('date') == d_str and (selected_cat == 'すべて' or l.get('cat') == selected_cat)]
         chart_values.append(len(day_logs))
             
@@ -130,13 +130,17 @@ def index():
     exam_date = datetime(2026, 3, 22, tzinfo=JST)
     days_left = max(0, (exam_date - now_jst).days)
     
+    # グラフのY軸単位やタイトルを「回答数」として扱う情報をテンプレートに渡す
+    chart_title = f"{selected_cat}の学習問題数"
+    
     return render_template('index.html', 
                            categories=ALL_CATEGORIES, 
                            days_left=days_left, 
                            wrong_count=wrong_count, 
                            labels=chart_labels, 
                            values=chart_values, 
-                           selected_cat=selected_cat)
+                           selected_cat=selected_cat,
+                           chart_title=chart_title)
 
 @app.route('/start_study', methods=['POST'])
 def start_study():
@@ -286,7 +290,7 @@ def answer(card_id):
     idx = session['total_in_session'] - len(session['quiz_queue'])
     progress = int((idx/session['total_in_session'])*100)
     
-    # 解説表示用に今回の結果を一時保存
+    # 解説画面表示用に今回の結果を一時保存
     session['last_result'] = {
         'card': card,
         'is_correct': is_correct,
